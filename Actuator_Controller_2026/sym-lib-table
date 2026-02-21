@@ -1,0 +1,6 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "Actuator_Controller_2026-altium-import")(type "KiCad")(uri "${KIPRJMOD}/Actuator_Controller_2026-altium-import.kicad_sym")(options "")(descr ""))
+  (lib (name "LM5157")(type "KiCad")(uri "${KIPRJMOD}/LM5157.kicad_sym")(options "")(descr ""))
+  (lib (name "Actuator_2026_DC_Stepup")(type "KiCad")(uri "${KIPRJMOD}/Actuator_2026_DC_Stepup.kicad_sym")(options "")(descr ""))
+)
