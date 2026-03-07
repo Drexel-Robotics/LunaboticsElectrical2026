@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "outtake_controller_2026_parts_library")(type "KiCad")(uri "${KIPRJMOD}/outtake_controller_2026_parts_library.kicad_sym")(options "")(descr ""))
+)
