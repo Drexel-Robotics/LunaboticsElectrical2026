@@ -2,7 +2,7 @@
 	(version 20250114)
 	(generator "eeschema")
 	(generator_version "9.0")
-	(uuid "f54e5033-d9ee-4915-a8f2-ecfad538a55c")
+	(uuid "b0cf5689-566f-4976-a60f-4220dfc70fc8")
 	(paper "A4")
 	(lib_symbols
 		(symbol "outtake_controller_2026_parts_library:LMD18200T_NOPB"
