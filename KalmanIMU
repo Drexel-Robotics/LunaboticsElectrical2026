@@ -1,0 +1,287 @@
+#include "Wire.h"
+
+// ---- IMU Defines ----
+#define MPU9250_IMU_ADDRESS      0x68
+#define MPU9250_MAG_ADDRESS      0x0C
+#define GYRO_FULL_SCALE_1000_DPS 0x10
+#define ACC_FULL_SCALE_2G        0x00
+#define TEMPERATURE_OFFSET       21
+#define INTERVAL_MS_PRINT        10    // 10ms = 100Hz for Serial Plotter
+
+// ---- Kalman Tuning ----
+// Q_ANGLE:   how much we trust the gyroscope model (lower = smoother, slower)
+// Q_BIAS:    how fast gyro bias drifts (keep small)
+// R_MEASURE: how noisy the accelerometer/magnetometer is (higher = smoother)
+#define Q_ANGLE   0.001
+#define Q_BIAS    0.003
+#define R_MEASURE 0.03
+
+// ---- Magnetometer adjustment values (from AK8963 ROM) ----
+float mag_adj_x = 1.0;
+float mag_adj_y = 1.0;
+float mag_adj_z = 1.0;
+
+// ---- Kalman Filter State (one per angle axis) ----
+struct KalmanAxis {
+  float angle;       // estimated angle (degrees)
+  float bias;        // estimated gyro bias (degrees/sec)
+  float P[2][2];     // error covariance matrix
+};
+
+KalmanAxis kf_pitch = {0, 0, {{0, 0}, {0, 0}}};
+KalmanAxis kf_roll  = {0, 0, {{0, 0}, {0, 0}}};
+KalmanAxis kf_yaw   = {0, 0, {{0, 0}, {0, 0}}};
+
+// ---- IMU Raw Structs ----
+struct { int16_t x, y, z; } gyroscope;
+struct { int16_t x, y, z; } accelerometer;
+struct { int16_t x, y, z; } magnetometer;
+struct { int16_t value;   } temperature;
+
+// ---- Normalized values ----
+struct {
+  struct { float x, y, z; } accelerometer;
+  struct { float x, y, z; } gyroscope;
+  struct { float x, y, z; } magnetometer;
+  float temperature;
+} normalized;
+
+// ---- Output angles ----
+float kalman_pitch = 0;
+float kalman_roll  = 0;
+float kalman_yaw   = 0;
+
+unsigned long lastPrintMillis = 0;
+unsigned long lastLoopMicros  = 0;
+
+// =============================
+// Wire.h I2C Helpers
+// =============================
+void I2CwriteByte(uint8_t address, uint8_t reg, uint8_t data) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.write(data);
+  Wire.endTransmission();
+}
+
+void I2Cread(uint8_t address, uint8_t reg, uint8_t length, uint8_t* buffer) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom(address, length);
+  for (int i = 0; i < length; i++) {
+    buffer[i] = Wire.read();
+  }
+}
+
+// =============================
+// Magnetometer Setup
+// =============================
+void setMagnetometerAdjustmentValues() {
+  // Put magnetometer in Fuse ROM access mode to read calibration
+  I2CwriteByte(MPU9250_MAG_ADDRESS, 0x0A, 0x0F);
+  delay(10);
+
+  uint8_t buff[3];
+  I2Cread(MPU9250_MAG_ADDRESS, 0x10, 3, buff);
+
+  // Adjustment formula from AK8963 datasheet
+  mag_adj_x = (((float)buff[0] - 128.0) / 256.0) + 1.0;
+  mag_adj_y = (((float)buff[1] - 128.0) / 256.0) + 1.0;
+  mag_adj_z = (((float)buff[2] - 128.0) / 256.0) + 1.0;
+
+  // Power down before switching to measurement mode
+  I2CwriteByte(MPU9250_MAG_ADDRESS, 0x0A, 0x00);
+  delay(10);
+}
+
+// =============================
+// IMU Ready Check
+// =============================
+bool isImuReady() {
+  uint8_t isReady;
+  I2Cread(MPU9250_IMU_ADDRESS, 58, 1, &isReady);
+  return isReady & 0x01;
+}
+
+// =============================
+// Read Raw IMU
+// =============================
+void readRawImu() {
+  uint8_t buff[14];
+  I2Cread(MPU9250_IMU_ADDRESS, 59, 14, buff);
+
+  accelerometer.x  = (buff[0]  << 8 | buff[1]);
+  accelerometer.y  = (buff[2]  << 8 | buff[3]);
+  accelerometer.z  = (buff[4]  << 8 | buff[5]);
+  temperature.value = (buff[6] << 8 | buff[7]);
+  gyroscope.x      = (buff[8]  << 8 | buff[9]);
+  gyroscope.y      = (buff[10] << 8 | buff[11]);
+  gyroscope.z      = (buff[12] << 8 | buff[13]);
+}
+
+// =============================
+// Read Raw Magnetometer
+// =============================
+void readRawMag() {
+  // Force read without data ready check to avoid stuck values
+  uint8_t buff[7];
+  I2Cread(MPU9250_MAG_ADDRESS, 0x03, 7, buff);
+
+  // AK8963 is little-endian (LSB first)
+  magnetometer.x = (buff[1] << 8 | buff[0]);
+  magnetometer.y = (buff[3] << 8 | buff[2]);
+  magnetometer.z = (buff[5] << 8 | buff[4]);
+  // buff[6] is ST2 register — read as part of burst to unlock next measurement
+}
+
+// =============================
+// Normalize to Real Units
+// =============================
+void normalizeImu() {
+  // Accelerometer: +-2g range -> divide by 16384 -> g's
+  normalized.accelerometer.x = accelerometer.x / 16384.0;
+  normalized.accelerometer.y = accelerometer.y / 16384.0;
+  normalized.accelerometer.z = accelerometer.z / 16384.0;
+
+  // Gyroscope: 1000 DPS range -> divide by 32.8 -> degrees/sec
+  normalized.gyroscope.x = gyroscope.x / 32.8;
+  normalized.gyroscope.y = gyroscope.y / 32.8;
+  normalized.gyroscope.z = gyroscope.z / 32.8;
+
+  // Magnetometer: 16-bit output at 0.15uT/LSB, apply factory adjustment
+  normalized.magnetometer.x = (magnetometer.x * 0.15) * mag_adj_x;
+  normalized.magnetometer.y = (magnetometer.y * 0.15) * mag_adj_y;
+  normalized.magnetometer.z = (magnetometer.z * 0.15) * mag_adj_z;
+
+  // Temperature
+  normalized.temperature = ((temperature.value - TEMPERATURE_OFFSET) / 333.87) + TEMPERATURE_OFFSET;
+}
+
+// =============================
+// Kalman Filter Update
+// =============================
+// new_angle: absolute angle reference (degrees) from accel or mag
+// new_rate:  angular rate from gyroscope (degrees/sec)
+// dt:        time since last call (seconds)
+float kalman_update(KalmanAxis &kf, float new_angle, float new_rate, float dt) {
+
+  // ---- Predict ----
+  // Project angle forward using gyro rate minus estimated bias
+  float rate = new_rate - kf.bias;
+  kf.angle += dt * rate;
+
+  // Update error covariance matrix
+  kf.P[0][0] += dt * (dt * kf.P[1][1] - kf.P[0][1] - kf.P[1][0] + Q_ANGLE);
+  kf.P[0][1] -= dt * kf.P[1][1];
+  kf.P[1][0] -= dt * kf.P[1][1];
+  kf.P[1][1] += Q_BIAS * dt;
+
+  // ---- Update ----
+  float S    = kf.P[0][0] + R_MEASURE;         // innovation covariance
+  float K[2] = { kf.P[0][0] / S,               // Kalman gain for angle
+                  kf.P[1][0] / S };             // Kalman gain for bias
+  float y    = new_angle - kf.angle;            // innovation (measurement residual)
+
+  kf.angle += K[0] * y;                         // correct angle estimate
+  kf.bias  += K[1] * y;                         // correct bias estimate
+
+  // Update error covariance
+  float P00 = kf.P[0][0];
+  float P01 = kf.P[0][1];
+  kf.P[0][0] -= K[0] * P00;
+  kf.P[0][1] -= K[0] * P01;
+  kf.P[1][0] -= K[1] * P00;
+  kf.P[1][1] -= K[1] * P01;
+
+  return kf.angle;
+}
+
+// =============================
+// Setup
+// =============================
+void setup() {
+  Wire.begin();
+  Serial.begin(115200);
+
+  // Configure IMU
+  I2CwriteByte(MPU9250_IMU_ADDRESS, 27, GYRO_FULL_SCALE_1000_DPS);
+  I2CwriteByte(MPU9250_IMU_ADDRESS, 28, ACC_FULL_SCALE_2G);
+  I2CwriteByte(MPU9250_IMU_ADDRESS, 55, 0x02); // Enable bypass mode for magnetometer
+  I2CwriteByte(MPU9250_IMU_ADDRESS, 56, 0x01); // Enable raw data interrupt
+  delay(200);
+
+  // Read magnetometer factory calibration values
+  setMagnetometerAdjustmentValues();
+  delay(100);
+
+  // Start magnetometer in continuous measurement mode 2 (100Hz, 16-bit)
+  I2CwriteByte(MPU9250_MAG_ADDRESS, 0x0A, 0x16);
+  delay(100);
+
+  lastLoopMicros = micros();
+}
+
+// =============================
+// Loop
+// =============================
+void loop() {
+  unsigned long currentMillis = millis();
+
+  if (isImuReady()) {
+    // Accurate dt using micros
+    unsigned long now = micros();
+    float dt = (now - lastLoopMicros) / 1000000.0;
+    lastLoopMicros = now;
+
+    // Clamp dt to avoid spikes on startup or Serial delays
+    if (dt <= 0 || dt > 0.5) dt = 0.01;
+
+    readRawImu();
+    readRawMag();
+    normalizeImu();
+
+    // ---- Pitch and Roll from accelerometer ----
+    // Drift-free absolute angle reference for Kalman correction
+    float accel_pitch = atan2(normalized.accelerometer.y, normalized.accelerometer.z) * 180.0 / PI;
+    float accel_roll  = atan2(-normalized.accelerometer.x, normalized.accelerometer.z) * 180.0 / PI;
+
+    // ---- Yaw from magnetometer ----
+    // Tilt-compensate the magnetometer using current pitch and roll estimates
+    float pitch_rad = kalman_pitch * (PI / 180.0);
+    float roll_rad  = kalman_roll  * (PI / 180.0);
+
+    float mx = normalized.magnetometer.x;
+    float my = normalized.magnetometer.y;
+    float mz = normalized.magnetometer.z;
+
+    // Tilt-compensated magnetic field components
+    float mag_x = mx * cos(pitch_rad) + mz * sin(pitch_rad);
+    float mag_y = mx * sin(roll_rad) * sin(pitch_rad) + my * cos(roll_rad) - mz * sin(roll_rad) * cos(pitch_rad);
+
+    // Heading from magnetometer (absolute yaw reference)
+    float mag_yaw = atan2(-mag_y, mag_x) * 180.0 / PI;
+
+    // ---- Kalman filter updates ----
+    kalman_pitch = kalman_update(kf_pitch, accel_pitch, normalized.gyroscope.x, dt);
+    kalman_roll  = kalman_update(kf_roll,  accel_roll,  normalized.gyroscope.y, dt);
+    kalman_yaw   = kalman_update(kf_yaw,   mag_yaw,     normalized.gyroscope.z, dt);
+  }
+
+  // Serial Plotter — label:value pairs, one line per sample, no plain text
+  if (currentMillis - lastPrintMillis >= INTERVAL_MS_PRINT) {
+    Serial.print("Gyr_X:"); Serial.print(normalized.gyroscope.x * (180.0 / PI), 3);
+    Serial.print(",");
+    Serial.print("Gyr_Y:"); Serial.print(normalized.gyroscope.y * (180.0 / PI), 3);
+    Serial.print(",");
+    Serial.print("Gyr_Z:"); Serial.print(normalized.gyroscope.z * (180.0 / PI), 3);
+    Serial.print(",");
+    Serial.print("Pitch:"); Serial.print(kalman_pitch, 2);
+    Serial.print(",");
+    Serial.print("Roll:");  Serial.print(kalman_roll, 2);
+    Serial.print(",");
+    Serial.print("Yaw:");   Serial.println(kalman_yaw, 2);
+
+    lastPrintMillis = currentMillis;
+  }
+}
