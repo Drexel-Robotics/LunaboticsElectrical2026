@@ -19,13 +19,18 @@ const int m1_pwm = 9;
 const int m1_dir= 15;
 const int m1_tflag = 24;
 
+const float maxTicks = 1735.0;
+const float ticksPerInch = (1735.0 / 10.0);
+const float maxLengthInch = 4.25;
+const float maxLengthTicks = maxLengthInch * ticksPerInch;
+
 const float act_min = 0.0;
-const float act_max = 1735.0;
+const float act_max = maxLengthTicks; 
 const float min_error = 10;
 
 // const int enA = 13;
-const int in1 = 3; //12
-const int in2 = 2; //11
+const int in1 = 2; //12
+const int in2 = 3; //11
 
 volatile long steps2 = 0;        // Pulses from  Hall Effect sensors
 int trigDelay2 = 1500;            // Delay bewteen pulse in microseconds
@@ -105,6 +110,8 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
 
+  // maxLengthTicks = maxLengthInch * ticksPerInch;
+
   if (GENERAL_DEBUG) Serial.println();
 
   pinMode(m2_pwm, OUTPUT);
@@ -145,6 +152,17 @@ void loop() {
   if (Serial.available() > 0) {
     input = Serial.readString();
     tokenize(tokens, input);
+  }
+
+  if ((dir1 = 1) && x1 > maxLengthTicks) {
+    dir1 = 0;
+    digitalWrite(m1_pwm, LOW);
+    digitalWrite(m1_dir, HIGH);
+  }
+  if ((dir2 = 2) && x2 > maxLengthTicks) {
+    dir2 = 0;
+    digitalWrite(m2_pwm, LOW);
+    digitalWrite(m2_dir, HIGH);
   }
   
   if (!stopCalled) {
@@ -218,7 +236,7 @@ void tokenize(char* tokens[], String input){
   else if (cmd1.equals("status") || cmd1.equals("print") || cmd1.equals("p")) {
     printStatus();
   }
-  else if (cmd1.equals("1") || cmd1.equals("f")) {
+  else if ((cmd1.equals("1") || cmd1.equals("f")) && ((x1 <= maxLengthTicks) || (x2 <= maxLengthTicks))) {
     if (GENERAL_DEBUG) Serial.println("FORWARD!");
     forward();
   }
@@ -268,6 +286,17 @@ void outtakeStop() {
   // analogWrite(enA, 200);
 }
 
+// void moveIntakeAct1(int dir, bool pwm, bool m_dir) {
+//   dir1 = dir;
+//   digitalWrite(m1_pwm, pwm);
+//   digitalWrite(m1_dir, m_dir);
+// }
+// void moveIntakeAct2(int dir, bool pwm, bool m_dir) {
+//   dir2 = dir;
+//   digitalWrite(m2_pwm, pwm);
+//   digitalWrite(m2_dir, m_dir);
+// }
+
 void forward(){
   if (GENERAL_DEBUG && !disableDebug) Serial.println("Running FORWARD");
   dir1=1;
@@ -288,6 +317,28 @@ void backward(){
   digitalWrite(m2_dir, LOW);
 }
 
+void adjust_intake(float current_pos) {
+  // float error = x1 - x2;
+  if ((x1 - current_pos) < -min_error) {
+    dir1=1;
+    digitalWrite(m1_pwm, HIGH);
+    digitalWrite(m1_dir, HIGH);
+  } else if ((x1 - current_pos) > min_error) {
+    dir1=-1;
+    digitalWrite(m1_pwm, HIGH);
+    digitalWrite(m1_dir, LOW);
+  }
+  if ((x2 - current_pos) < -min_error) {
+    dir2=1;
+    digitalWrite(m2_pwm, HIGH);
+    digitalWrite(m2_dir, HIGH);
+  } else if ((x1 - current_pos) > min_error) {
+    dir2=-1;
+    digitalWrite(m2_pwm, HIGH);
+    digitalWrite(m2_dir, LOW);
+  }
+}
+
 float pos_move_to = 0.0;
 unsigned long posMove_lastMoveTime = 0;
 void move_2_pos_loop() {
@@ -296,8 +347,8 @@ void move_2_pos_loop() {
   bool run = true;
   do {
     if (movePosLoop) {
-      // long avg = (x1 + x2) / 2;
-      long avg = x2;
+      long avg = (x1 + x2) / 2;
+      // long avg = x2;
       float error = pos - avg;
 
       if (abs(error) < min_error) {
@@ -307,11 +358,13 @@ void move_2_pos_loop() {
       }
 
       disableDebug = true;
-      if (error > min_error) {
-        forward();
-      } else if (error < -min_error) {
-        backward();
-      }
+      // if (error > min_error) {
+      //   forward();
+      // } else if (error < -min_error) {
+      //   backward();
+      // }
+      float target_pos = avg + min(max(-20, error), 20);
+      adjust_intake(pos);
       disableDebug = false;
       
       // stop when no movement detected for 1 second
