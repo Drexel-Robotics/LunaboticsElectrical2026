@@ -37,9 +37,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.8,
-          "height": 1.27,
-          "width": 2.54
+          "drill": 2.3,
+          "height": 2.8,
+          "width": 2.8
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -613,14 +613,6 @@
     [
       "b9807589-2ef3-4597-88c6-863b45a9e554",
       "Root"
-    ],
-    [
-      "b50223c2-f889-4ba9-b015-9cbb49d0bdd7",
-      "voltage_regulator"
-    ],
-    [
-      "cf97a358-61b3-4a31-8f2a-d11f756df805",
-      "LMD18200"
     ]
   ],
   "text_variables": {}
