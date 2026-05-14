@@ -28,9 +28,10 @@ const float act_min = 0.0;
 const float act_max = maxLengthTicks; 
 const float min_error = 10;
 
-// const int enA = 13;
-const int in1 = 2; //12
-const int in2 = 3; //11
+const int in1 = 2; 
+const int in2 = 3; 
+const int rumble = 4;
+const int enA = 5;
 
 volatile long steps2 = 0;        // Pulses from  Hall Effect sensors
 int trigDelay2 = 1500;            // Delay bewteen pulse in microseconds
@@ -111,7 +112,6 @@ void setup() {
   Serial.begin(9600);
 
   // maxLengthTicks = maxLengthInch * ticksPerInch;
-
   if (GENERAL_DEBUG) Serial.println();
 
   pinMode(m2_pwm, OUTPUT);
@@ -124,9 +124,11 @@ void setup() {
   pinMode(m1_tflag, INPUT);
   pinMode(m1_hall, INPUT);
 
-  // pinMode(enA, OUTPUT);
   pinMode(in1, OUTPUT);
   pinMode(in2, OUTPUT);
+
+  pinMode(rumble, OUTPUT);
+  pinMode(enA, OUTPUT);
   
   attachInterrupt(digitalPinToInterrupt(m2_hall), countSteps2, RISING);
   attachInterrupt(digitalPinToInterrupt(m1_hall), countSteps1, RISING);
@@ -253,15 +255,18 @@ void tokenize(char* tokens[], String input){
 
   else if (cmd1.equals("3") || cmd1.equals("he")) {
     if (GENERAL_DEBUG) Serial.print("OPENING!");
+    rumbleStart();
     outtakeExtend();
   }
   else if (cmd1.equals("4") || cmd1.equals("hr")) {
     if (GENERAL_DEBUG) Serial.print("CLOSING!");
     outtakeRetract();
+    rumbleStop();
   }
   else if (cmd1.equals("hstop") || cmd1.equals("5")) {
     if (GENERAL_DEBUG) Serial.println("OUTTAKE STOP!");
     outtakeStop();
+    rumbleStop();
   }
 
   // stopCalled = false;
@@ -269,21 +274,36 @@ void tokenize(char* tokens[], String input){
 
 void outtakeExtend() {
   if (GENERAL_DEBUG) Serial.println("Opening Hopper");
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW);
-  // analogWrite(enA, 200);
-}
-void outtakeRetract() {
-  if (GENERAL_DEBUG) Serial.println("Closing Hopper");
+  digitalWrite(enA, HIGH);
   digitalWrite(in1, LOW);
   digitalWrite(in2, HIGH);
   // analogWrite(enA, 200);
 }
+
+void outtakeRetract() {
+  if (GENERAL_DEBUG) Serial.println("Closing Hopper");
+  digitalWrite(enA, HIGH);
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  // analogWrite(enA, 200);
+}
+
 void outtakeStop() {
   if (GENERAL_DEBUG) Serial.println("Running Outtake STOP");
+  digitalWrite(enA, LOW);
   digitalWrite(in1, LOW);
   digitalWrite(in2, LOW);
   // analogWrite(enA, 200);
+}
+
+void rumbleStart() {
+  if (GENERAL_DEBUG) Serial.println("COMMOTION IN DA OCEAN!");
+  digitalWrite(rumble, HIGH);
+}
+
+void rumbleStop() {
+  if (GENERAL_DEBUG) Serial.println("DWERKING STOPPED");
+  digitalWrite(rumble, LOW);
 }
 
 // void moveIntakeAct1(int dir, bool pwm, bool m_dir) {
@@ -301,20 +321,28 @@ void forward(){
   if (GENERAL_DEBUG && !disableDebug) Serial.println("Running FORWARD");
   dir1=1;
   dir2=1;
+  // digitalWrite(m1_pwm, HIGH);
+  // digitalWrite(m1_dir, HIGH);
+  // digitalWrite(m2_pwm, HIGH);
+  // digitalWrite(m2_dir, HIGH);
   digitalWrite(m1_pwm, HIGH);
-  digitalWrite(m1_dir, HIGH);
+  digitalWrite(m1_dir, LOW);
   digitalWrite(m2_pwm, HIGH);
-  digitalWrite(m2_dir, HIGH);
+  digitalWrite(m2_dir, LOW);
 }
 
 void backward(){
   if (GENERAL_DEBUG && !disableDebug) Serial.println("Running BACKWARD");
   dir1=-1;
   dir2=-1;
-  digitalWrite(m1_pwm, HIGH);
-  digitalWrite(m1_dir, LOW);
-  digitalWrite(m2_pwm, HIGH);
-  digitalWrite(m2_dir, LOW);
+  // digitalWrite(m1_pwm, HIGH);
+  // digitalWrite(m1_dir, LOW);
+  // digitalWrite(m2_pwm, HIGH);
+  // digitalWrite(m2_dir, LOW);
+  digitalWrite(m1_pwm, LOW);
+  digitalWrite(m1_dir, HIGH);
+  digitalWrite(m2_pwm, LOW);
+  digitalWrite(m2_dir, HIGH);
 }
 
 void adjust_intake(float current_pos) {
@@ -380,6 +408,7 @@ void move_2_pos_loop() {
     if (GENERAL_DEBUG) Serial.println("Reached Pos");
   }
 }
+
 void move_2_pos(float pos) {
   if (GENERAL_DEBUG) Serial.println("Running MOVE 2 POS");
 
@@ -446,6 +475,7 @@ void homingLoop() {
     if (GENERAL_DEBUG) Serial.println("All homed");
   }
 }
+
 void homing() {
   if (GENERAL_DEBUG) Serial.println("Running Homing Function");
 
@@ -458,4 +488,4 @@ void homing() {
   homing_lastMoveTime = lastMoveTime;
   runHomingLoop = true;
   homingLoop();
-}// // 
+}// 
