@@ -7,6 +7,8 @@
 #define SKIP_AUTO_HOMING 1
 #define HOMING_DELAY_MS 30*1000
 
+#define MAX_CHAR_LENGTH 11
+
 bool disableDebug = false;
 
 const int m2_hall = 20;
@@ -19,6 +21,11 @@ const int m1_pwm = 9;
 const int m1_dir= 15;
 const int m1_tflag = 24;
 
+const int rumble = 4;
+
+const int test_pwm = 6;
+const int test_dir = 7;
+
 const float maxTicks = 1735.0;
 const float ticksPerInch = (1735.0 / 10.0);
 const float maxLengthInch = 4.25;
@@ -28,9 +35,8 @@ const float act_min = 0.0;
 const float act_max = maxLengthTicks; 
 const float min_error = 10;
 
-const int in1 = 2; 
-const int in2 = 3; 
-const int rumble = 4;
+const int in1 = 2; //12
+const int in2 = 3; //11
 const int enA = 5;
 
 volatile long steps2 = 0;        // Pulses from  Hall Effect sensors
@@ -42,6 +48,8 @@ int trigDelay1 = 1500;            // Delay bewteen pulse in microseconds
 unsigned long lastStepTime1 = 0; // Time stamp of last pulse
 
 char* tokens[3] = {};
+char tempInput[MAX_CHAR_LENGTH];
+unsigned int idx = 0;
 
 #define DELAY_MS 10000
 
@@ -107,12 +115,17 @@ void countSteps1(void) {
   }
 }
 
+int testing = 0;
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
 
   // maxLengthTicks = maxLengthInch * ticksPerInch;
+
   if (GENERAL_DEBUG) Serial.println();
+  memset(tempInput, 0, sizeof(tempInput));
+  idx = 0;
 
   pinMode(m2_pwm, OUTPUT);
   pinMode(m2_dir, OUTPUT);
@@ -124,8 +137,12 @@ void setup() {
   pinMode(m1_tflag, INPUT);
   pinMode(m1_hall, INPUT);
 
+  // pinMode(enA, OUTPUT);
   pinMode(in1, OUTPUT);
   pinMode(in2, OUTPUT);
+
+  pinMode(test_dir, OUTPUT);
+  pinMode(test_pwm, OUTPUT);
 
   pinMode(rumble, OUTPUT);
   pinMode(enA, OUTPUT);
@@ -149,11 +166,25 @@ void loop() {
   kalmanUpdate(steps1, x1, P1);
   kalmanUpdate(steps2, x2, P2);
 
-  String input;
-    
   if (Serial.available() > 0) {
-    input = Serial.readString();
-    tokenize(tokens, input);
+    while (Serial.available() > 0) {
+      if (idx > (MAX_CHAR_LENGTH)) {
+        Serial.println("Input Overflow Error");
+        memset(tempInput, 0, sizeof(tempInput));
+        idx = 0;
+        break;
+      }
+      char incomingByte = Serial.read();
+      if (incomingByte != '\n') {
+        tempInput[idx++] = incomingByte;
+      } else {
+        String input = String(tempInput);
+        tokenize(tokens, input);
+        memset(tempInput, 0, sizeof(tempInput));
+        idx = 0;
+        break;
+      }
+    }
   }
 
   if ((dir1 = 1) && x1 > maxLengthTicks) {
@@ -175,6 +206,9 @@ void loop() {
       homingLoop();
     }
   }
+
+  // digitalWrite(test_dir, LOW);
+  // digitalWrite(test_pwm, LOW);
 }
 
 // Using for testing
@@ -408,7 +442,6 @@ void move_2_pos_loop() {
     if (GENERAL_DEBUG) Serial.println("Reached Pos");
   }
 }
-
 void move_2_pos(float pos) {
   if (GENERAL_DEBUG) Serial.println("Running MOVE 2 POS");
 
@@ -429,10 +462,14 @@ void stop(){
   if (GENERAL_DEBUG) Serial.println("Running STOP");
   dir1=0;
   dir2=0;
+  // digitalWrite(m1_pwm, LOW);
+  // digitalWrite(m1_dir, HIGH);
+  // digitalWrite(m2_pwm, LOW);
+  // digitalWrite(m2_dir, HIGH);
   digitalWrite(m1_pwm, LOW);
-  digitalWrite(m1_dir, HIGH);
+  digitalWrite(m1_dir, LOW);
   digitalWrite(m2_pwm, LOW);
-  digitalWrite(m2_dir, HIGH);
+  digitalWrite(m2_dir, LOW);
 
   // Lock Kalman state to current steps
   x1 = steps1;
@@ -475,7 +512,6 @@ void homingLoop() {
     if (GENERAL_DEBUG) Serial.println("All homed");
   }
 }
-
 void homing() {
   if (GENERAL_DEBUG) Serial.println("Running Homing Function");
 
@@ -488,4 +524,4 @@ void homing() {
   homing_lastMoveTime = lastMoveTime;
   runHomingLoop = true;
   homingLoop();
-}// 
+}// // 
